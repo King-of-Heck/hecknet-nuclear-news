@@ -30,7 +30,8 @@ POLL_INTERVAL = 60          # seconds between feed checks
 # Keywords to watch for (case-insensitive).
 # Each entry is a plain string; we do whole-word / flexible matching below.
 KEYWORDS = ["nuclear", "candu", "ap1000", "ap 1000", "monark",
-            "opg", "ontario power generation", "bruce power"]
+            "opg", "ontario power generation", "bruce power",
+            "sizewell", "hinkley point", "edf", "framatome", "cnsc", "aecl"]
 
 RSS_FEEDS = [
     ("Globe & Mail: Canada",        "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/"),
@@ -101,7 +102,8 @@ HEADERS = {"User-Agent": "nuclear-news-receipt/1.0"}
 # Pre-compile a single OR pattern; \b gives word boundaries where sensible.
 # "ap 1000" has a space so we handle it literally; others get \b guards.
 _KW_PATTERN = re.compile(
-    r'\b(?:nuclear|candu|ap1000|monark|opg)\b|ap\s+1000|ontario\s+power\s+generation|bruce\s+power',
+    r'\b(?:nuclear|candu|ap1000|monark|opg|edf|framatome|cnsc|aecl|sizewell)\b'
+    r'|ap\s+1000|ontario\s+power\s+generation|bruce\s+power|hinkley\s+point',
     re.IGNORECASE
 )
 
@@ -244,7 +246,8 @@ def build_alert_image(source: str, title: str, summary: str, timestamp: str) -> 
     def div():
         add(DIVIDER)
 
-    add("☢  NUCLEAR ALERT  ☢", bold=True, align="center")
+    add("HECKNET NEWS NETWORK", bold=True, align="center")
+    add("NUCLEAR NEWSFLASH",    bold=True, align="center")
     add(timestamp,                         align="center")
     div()
 
@@ -339,8 +342,9 @@ def main():
                     continue                        # already processed
                 seen_ids.add(item["id"])
 
+                is_wnn = "World Nuclear News" in item["source"]
                 haystack = f"{item['title']} {item['summary']}"
-                if contains_keyword(haystack):
+                if is_wnn or contains_keyword(haystack):
                     try:
                         print_alert(item["source"], item["title"], item["summary"])
                     except Exception as e:
