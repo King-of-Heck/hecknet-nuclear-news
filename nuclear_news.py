@@ -55,14 +55,70 @@ POLL_INTERVAL = 60          # seconds between feed checks
 
 # Keywords to watch for (case-insensitive).
 # Each entry is a plain string; we do whole-word / flexible matching below.
-KEYWORDS = ["nuclear", "candu", "ap1000", "ap 1000", "monark"]
+KEYWORDS = ["nuclear", "candu", "ap1000", "ap 1000", "monark",
+            "opg", "ontario power generation", "bruce power"]
 
 RSS_FEEDS = [
-    ("Globe & Mail",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/"),
-    ("World Nuclear News", "https://world-nuclear-news.org/rss"),
-    ("New York Times",     "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"),
-    ("BBC News",           "https://feeds.bbci.co.uk/news/rss.xml"),
-    ("Financial Times",    "https://www.ft.com/rss/home"),
+    ("Globe & Mail: Canada",        "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/"),
+    ("Globe & Mail: Business",      "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/"),
+    ("Globe & Mail: Politics",      "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/politics/"),
+    ("Globe & Mail: World",         "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/world/"),
+    ("Globe & Mail: Opinion",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/opinion/"),
+    ("Globe & Mail: Technology",    "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/technology/"),
+    ("Globe & Mail: Science",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/science/"),
+    ("Globe & Mail: Health",        "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/health/"),
+    ("Globe & Mail: Environment",   "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/environment/"),
+    ("Globe & Mail: Economy",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/economy/"),
+    ("Globe & Mail: Real Estate",   "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/real-estate/"),
+    ("Globe & Mail: Arts",          "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/arts/"),
+    ("Globe & Mail: Life",          "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/life/"),
+
+    ("World Nuclear News",          "https://world-nuclear-news.org/rss"),
+
+    ("NYT: Home",                   "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"),
+    ("NYT: World",                  "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
+    ("NYT: US",                     "https://rss.nytimes.com/services/xml/rss/nyt/US.xml"),
+    ("NYT: Politics",               "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml"),
+    ("NYT: Business",               "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"),
+    ("NYT: Technology",             "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"),
+    ("NYT: Science",                "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml"),
+    ("NYT: Health",                 "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml"),
+    ("NYT: Climate",                "https://rss.nytimes.com/services/xml/rss/nyt/Climate.xml"),
+
+    ("BBC: Top Stories",            "https://feeds.bbci.co.uk/news/rss.xml"),
+    ("BBC: World",                  "https://feeds.bbci.co.uk/news/world/rss.xml"),
+    ("BBC: UK",                     "https://feeds.bbci.co.uk/news/uk/rss.xml"),
+    ("BBC: Business",               "https://feeds.bbci.co.uk/news/business/rss.xml"),
+    ("BBC: Technology",             "https://feeds.bbci.co.uk/news/technology/rss.xml"),
+    ("BBC: Science & Environment",  "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml"),
+    ("BBC: Health",                 "https://feeds.bbci.co.uk/news/health/rss.xml"),
+    ("BBC: Politics",               "https://feeds.bbci.co.uk/news/politics/rss.xml"),
+    ("BBC: World: Asia",            "https://feeds.bbci.co.uk/news/world/asia/rss.xml"),
+    ("BBC: World: Europe",          "https://feeds.bbci.co.uk/news/world/europe/rss.xml"),
+
+    # Financial Times
+    # Note: FT may require a subscription session for some feeds.
+    ("FT: Home",                    "https://www.ft.com/rss/home"),
+    ("FT: World",                   "https://www.ft.com/world?format=rss"),
+    ("FT: UK",                      "https://www.ft.com/world/uk?format=rss"),
+    ("FT: US",                      "https://www.ft.com/world/us?format=rss"),
+    ("FT: Europe",                  "https://www.ft.com/world/europe?format=rss"),
+    ("FT: Asia-Pacific",            "https://www.ft.com/world/asia-pacific?format=rss"),
+    ("FT: Global Economy",          "https://www.ft.com/global-economy?format=rss"),
+    ("FT: Energy",                  "https://www.ft.com/energy?format=rss"),
+    ("FT: Companies",               "https://www.ft.com/companies?format=rss"),
+
+    ("Toronto Star: Top Stories",   "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.topstories.rss"),
+    ("Toronto Star: News",          "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.rss"),
+    ("Toronto Star: Business",      "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.business.rss"),
+    ("Toronto Star: Politics",      "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.canada.politics.rss"),
+    ("Toronto Star: World",         "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.world.rss"),
+    ("Toronto Star: Opinion",       "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.opinion.rss"),
+    ("Toronto Star: Science",       "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.sciencetech.rss"),
+    ("Toronto Star: Environment",   "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.environment.rss"),
+    ("Toronto Star: Life",          "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.life.rss"),
+    ("Toronto Star: Entertainment", "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.entertainment.rss"),
+    ("Toronto Star: Sports",        "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.sports.rss"),
 ]
 
 HEADERS = {"User-Agent": "nuclear-news-receipt/1.0"}
@@ -71,7 +127,7 @@ HEADERS = {"User-Agent": "nuclear-news-receipt/1.0"}
 # Pre-compile a single OR pattern; \b gives word boundaries where sensible.
 # "ap 1000" has a space so we handle it literally; others get \b guards.
 _KW_PATTERN = re.compile(
-    r'\b(?:nuclear|candu|ap1000|monark)\b|ap\s+1000',
+    r'\b(?:nuclear|candu|ap1000|monark|opg)\b|ap\s+1000|ontario\s+power\s+generation|bruce\s+power',
     re.IGNORECASE
 )
 
@@ -177,7 +233,7 @@ def build_alert_image(source: str, title: str, summary: str, timestamp: str) -> 
     def div():
         add(DIVIDER)
 
-    add("☢  NUCLEAR NEWS FLASH ☢", bold=True, align="center")
+    add("☢  NUCLEAR ALERT  ☢", bold=True, align="center")
     add(timestamp,                         align="center")
     div()
 
@@ -238,12 +294,12 @@ def send_image_to_printer(pil_img: Image.Image):
     hdc.EndDoc()
     hdc.DeleteDC()
 
+
 def print_alert(source: str, title: str, summary: str):
     timestamp = datetime.now().strftime("%a %b %d %Y  %I:%M %p")
     print(f"Printing: [{source}] {title[:70]}")
     img = build_alert_image(source, title, summary, timestamp)
     send_image_to_printer(img)
-    send_cut_command()
 
 
 def main():
