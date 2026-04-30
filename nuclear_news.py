@@ -238,20 +238,6 @@ def send_image_to_printer(pil_img: Image.Image):
     hdc.EndDoc()
     hdc.DeleteDC()
 
-
-def send_cut_command():
-    CUT_CMD  = b'\x1b\x64\x03\x1d\x56\x00'
-    hprinter = win32print.OpenPrinter(PRINTER_NAME)
-    try:
-        hjob = win32print.StartDocPrinter(hprinter, 1, ("Cut", None, "RAW"))
-        win32print.StartPagePrinter(hprinter)
-        win32print.WritePrinter(hprinter, CUT_CMD)
-        win32print.EndPagePrinter(hprinter)
-        win32print.EndDocPrinter(hprinter)
-    finally:
-        win32print.ClosePrinter(hprinter)
-
-
 def print_alert(source: str, title: str, summary: str):
     timestamp = datetime.now().strftime("%a %b %d %Y  %I:%M %p")
     print(f"Printing: [{source}] {title[:70]}")
