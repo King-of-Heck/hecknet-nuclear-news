@@ -1,30 +1,4 @@
 """
-nuclear_news_receipt.py
------------------------
-Polls RSS feeds from multiple outlets every 60 seconds.
-When any item's title or description contains the keywords:
-  Nuclear, CANDU, AP1000, AP 1000, Monark
-…it prints the headline + summary on the XP-80C thermal receipt printer.
-
-Already-printed items are tracked by GUID/link so they never print twice.
-
-Sources
--------
-  - Globe and Mail      https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/
-  - World Nuclear News  https://world-nuclear-news.org/rss
-  - New York Times      https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml
-  - BBC News            https://feeds.bbci.co.uk/news/rss.xml
-  - Financial Times     https://www.ft.com/rss/home
-
-Setup
------
-    pip install requests pillow pywin32
-
-Run
----
-    python nuclear_news_receipt.py
-
-It will loop forever (Ctrl-C to stop).
 """
 
 import re
@@ -140,9 +114,25 @@ _HTML_TAG = re.compile(r"<[^>]+>")
 def strip_html(text: str) -> str:
     return _HTML_TAG.sub("", text).strip()
 
+def _parse_entries_bs4(content: bytes) -> list:
+    """Fallback parser using BeautifulSoup for malformed XML feeds."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(content, "xml")
+    entries = soup.find_all("item") or soup.find_all("entry")
+    return entries
+
+def _text(tag, *names):
+    """Try multiple tag names and return the first non-empty text found."""
+    for name in names:
+        el = tag.find(name)
+        if el and el.get_text(strip=True):
+            return el.get_text(strip=True)
+    return ""
+
 def fetch_items(source_name: str, url: str) -> list[dict]:
     """
     Returns a list of dicts with keys: id, title, summary, source.
+    Falls back to BeautifulSoup XML parser if stdlib ET chokes on malformed XML.
     """
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
@@ -151,13 +141,34 @@ def fetch_items(source_name: str, url: str) -> list[dict]:
         print(f"[{source_name}] Fetch error: {e}")
         return []
 
+    use_bs4 = False
     try:
         root = ET.fromstring(r.content)
-    except ET.ParseError as e:
-        print(f"[{source_name}] XML parse error: {e}")
-        return []
+    except ET.ParseError:
+        use_bs4 = True
 
     items = []
+
+    if use_bs4:
+        try:
+            raw_entries = _parse_entries_bs4(r.content)
+        except Exception as e:
+            print(f"[{source_name}] BS4 parse error: {e}")
+            return []
+
+        for entry in raw_entries:
+            title   = strip_html(_text(entry, "title"))
+            summary = strip_html(_text(entry, "description", "summary", "content"))
+            uid     = _text(entry, "guid", "id", "link") or title
+            if title:
+                items.append({
+                    "id":      uid.strip(),
+                    "title":   title,
+                    "summary": summary,
+                    "source":  source_name,
+                })
+        return items
+
     ns = {"atom": "http://www.w3.org/2005/Atom"}
     entries = root.findall(".//item") or root.findall(".//atom:entry", ns)
 
@@ -293,7 +304,6 @@ def send_image_to_printer(pil_img: Image.Image):
     hdc.EndPage()
     hdc.EndDoc()
     hdc.DeleteDC()
-
 
 def print_alert(source: str, title: str, summary: str):
     timestamp = datetime.now().strftime("%a %b %d %Y  %I:%M %p")
