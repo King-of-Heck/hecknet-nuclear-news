@@ -25,7 +25,7 @@ PAPER_PX     = int(PAPER_MM / 25.4 * PRINTER_DPI)   # ≈ 638 px
 MARGIN_PX    = 10
 TEXT_PX      = PAPER_PX - 2 * MARGIN_PX
 
-POLL_INTERVAL = 60          # seconds between feed checks
+POLL_INTERVAL = 600         # seconds between feed checks (10 minutes)
 
 # Keywords to watch for (case-insensitive).
 # Each entry is a plain string; we do whole-word / flexible matching below.
@@ -110,6 +110,10 @@ _KW_PATTERN = re.compile(
 def contains_keyword(text: str) -> bool:
     return bool(_KW_PATTERN.search(text))
 
+def ts() -> str:
+    """Current timestamp string for console logging."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 _HTML_TAG = re.compile(r"<[^>]+>")
 
@@ -140,7 +144,7 @@ def fetch_items(source_name: str, url: str) -> list[dict]:
         r = requests.get(url, headers=HEADERS, timeout=15)
         r.raise_for_status()
     except Exception as e:
-        print(f"[{source_name}] Fetch error: {e}")
+        print(f"[{ts()}] [{source_name}] Fetch error: {e}")
         return []
 
     use_bs4 = False
@@ -155,7 +159,7 @@ def fetch_items(source_name: str, url: str) -> list[dict]:
         try:
             raw_entries = _parse_entries_bs4(r.content)
         except Exception as e:
-            print(f"[{source_name}] BS4 parse error: {e}")
+            print(f"[{ts()}] [{source_name}] BS4 parse error: {e}")
             return []
 
         for entry in raw_entries:
@@ -310,30 +314,30 @@ def send_image_to_printer(pil_img: Image.Image):
 
 def print_alert(source: str, title: str, summary: str):
     timestamp = datetime.now().strftime("%a %b %d %Y  %I:%M %p")
-    print(f"Printing: [{source}] {title[:70]}")
     img = build_alert_image(source, title, summary, timestamp)
     send_image_to_printer(img)
 
 
 def main():
-    print("Nuclear News Receipt Printer starting…")
-    print(f"Keywords : {', '.join(KEYWORDS)}")
-    print(f"Interval : {POLL_INTERVAL}s")
-    print(f"Printer  : {PRINTER_NAME}")
-    print("Press Ctrl-C to stop.\n")
+    print(f"[{ts()}] Nuclear News Receipt Printer starting…")
+    print(f"[{ts()}] Keywords : {', '.join(KEYWORDS)}")
+    print(f"[{ts()}] Interval : {POLL_INTERVAL}s ({POLL_INTERVAL // 60} min)")
+    print(f"[{ts()}] Printer  : {PRINTER_NAME}")
+    print(f"[{ts()}] Press Ctrl-C to stop.\n")
 
     # IDs of items we have already printed (grows forever during the session;
     # restart the script to reset, or persist to a file if preferred).
     seen_ids: set[str] = set()
 
-    print("Seeding seen items from current feeds (no printing on first pass)…")
+    print(f"[{ts()}] Seeding seen items from current feeds (no printing on first pass)…")
     for source, url in RSS_FEEDS:
         for item in fetch_items(source, url):
             seen_ids.add(item["id"])
-    print(f"Seeded {len(seen_ids)} existing items. Watching for new ones…\n")
+    print(f"[{ts()}] Seeded {len(seen_ids)} existing items. Watching for new ones…\n")
 
     while True:
         start = time.monotonic()
+        print(f"[{ts()}] Polling {len(RSS_FEEDS)} feeds…")
 
         for source, url in RSS_FEEDS:
             items = fetch_items(source, url)
@@ -346,15 +350,16 @@ def main():
                 haystack = f"{item['title']} {item['summary']}"
                 if is_wnn or contains_keyword(haystack):
                     try:
+                        print(f"[{ts()}]    MATCH [{source}] {item['title'][:70]}")
                         print_alert(item["source"], item["title"], item["summary"])
                     except Exception as e:
-                        print(f"  [PRINT ERROR] {e}")
+                        print(f"[{ts()}]   [PRINT ERROR] {e}")
                 else:
-                    print(f"  [skip] [{source}] {item['title'][:60]}")
+                    print(f"[{ts()}]   [skip] [{source}] {item['title'][:60]}")
 
         elapsed = time.monotonic() - start
         sleep_for = max(0, POLL_INTERVAL - elapsed)
-        print(f"Poll complete. Next check in {sleep_for:.0f}s…")
+        print(f"[{ts()}] Poll complete in {elapsed:.1f}s. Next check in {sleep_for:.0f}s…\n")
         time.sleep(sleep_for)
 
 
@@ -362,4 +367,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nStopped.")
+        print(f"\n[{ts()}] Stopped.")
