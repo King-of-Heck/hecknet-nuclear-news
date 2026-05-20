@@ -211,6 +211,41 @@ def load_font(bold=False):
     except OSError:
         return ImageFont.load_default()
 
+# EMOJI GLYPH HELPERS  (same technique as weather_receipt)
+# Courier lacks  so we render it separately with Segoe UI Emoji
+
+RADS_FONT_SIZE = 26   # pt — size of ☢ radioactivity glyphs
+RADS_Y_OFFSET  = 36   # px at 4x — shifts rads symbol DOWN relative to text baseline
+
+_EMOJI_FONT_CANDIDATES = [
+    "seguiemj.ttf",
+    "C:/Windows/Fonts/seguiemj.ttf",
+    "seguisym.ttf",
+]
+
+def _load_emoji_font(size_pt: int):
+    for path in _EMOJI_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size_pt * RENDER_SCALE)
+        except OSError:
+            continue
+    return load_font(bold=True)
+
+def _draw_flanked_header(draw, text: str, glyph: str,
+                         font_text, font_glyph,
+                         paper_w: int, y: int, y_offset: int):
+    """Render  <glyph>  <text>  <glyph>  centred on the line."""
+    gap     = int(font_text.size * 0.4)
+    glyph_w = int(font_glyph.getlength(glyph))
+    text_w  = int(font_text.getlength(text))
+    total_w = glyph_w + gap + text_w + gap + glyph_w
+    x = (paper_w - total_w) // 2
+    draw.text((x, y + y_offset), glyph, font=font_glyph, fill="black")
+    x += glyph_w + gap
+    draw.text((x, y), text, font=font_text, fill="black")
+    x += text_w + gap
+    draw.text((x, y + y_offset), glyph, font=font_glyph, fill="black")
+
 def wrap_text(text: str, font, max_width: int) -> list[str]:
     """Word-wrap text to fit max_width pixels."""
     words = text.split()
@@ -238,9 +273,10 @@ def build_alert_image(source: str, title: str, summary: str, timestamp: str) -> 
     text_w   = TEXT_PX * S
     line_h   = int(FONT_SIZE * S * 1.35)
 
-    font_n  = load_font(bold=False)
-    font_b  = load_font(bold=True)
-    DIVIDER = "─" * 32
+    font_n     = load_font(bold=False)
+    font_b     = load_font(bold=True)
+    font_rads  = _load_emoji_font(RADS_FONT_SIZE)
+    DIVIDER    = "─" * 32
 
     ops = []
 
@@ -251,8 +287,9 @@ def build_alert_image(source: str, title: str, summary: str, timestamp: str) -> 
         add(DIVIDER)
 
     add("HECKNET NEWS NETWORK", bold=True, align="center")
-    add("NUCLEAR NEWSFLASH",    bold=True, align="center")
-    add(timestamp,                         align="center")
+    rads_op_idx = len(ops)
+    add("", align="center")          # → ☢ NUCLEAR DISPATCH ☢
+    add(timestamp,  align="center")
     div()
 
     add(f"SOURCE: {source.upper()}", bold=True)
@@ -269,18 +306,24 @@ def build_alert_image(source: str, title: str, summary: str, timestamp: str) -> 
 
     div()
 
-    total_h = len(ops) * line_h + line_h * 2
+    top_pad = RADS_Y_OFFSET
+    total_h = len(ops) * line_h + line_h * 2 + top_pad
     hi_res  = Image.new("RGB", (paper_w, total_h), "white")
     draw    = ImageDraw.Draw(hi_res)
-    y       = margin // 2
+    y       = margin // 2 + top_pad
 
-    for text, font, align in ops:
+    for i, (text, font, align) in enumerate(ops):
         if align == "center":
             tw = font.getlength(text)
             x  = (paper_w - tw) / 2
         else:
             x = margin
         draw.text((x, y), text, font=font, fill="black")
+
+        if i == rads_op_idx:
+            _draw_flanked_header(draw, "NUCLEAR DISPATCH", "\u2622",
+                                 font_b, font_rads, paper_w, y, RADS_Y_OFFSET)
+
         y += line_h
 
     out_w  = PAPER_PX
@@ -289,7 +332,7 @@ def build_alert_image(source: str, title: str, summary: str, timestamp: str) -> 
     output = ImageEnhance.Contrast(output).enhance(2.5)
     output = output.convert("L").convert("RGB")
 
-    final_h = int(y / S) + line_h
+    final_h = int(y / S)
     return output.crop((0, 0, out_w, final_h))
 
 
