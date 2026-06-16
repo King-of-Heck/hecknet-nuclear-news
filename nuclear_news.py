@@ -1,6 +1,9 @@
 """
 """
 
+import sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import re
 import time
 import xml.etree.ElementTree as ET
