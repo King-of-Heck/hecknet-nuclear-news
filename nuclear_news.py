@@ -1,4 +1,11 @@
 """
+Nuclear news ticker.
+
+Polls a set of RSS feeds every ten minutes and prints any story matching the
+keyword list. Everything from World Nuclear News prints regardless of keywords.
+Stories already seen are tracked by GUID so nothing prints twice.
+
+    python nuclear_news.py
 """
 
 import sys
