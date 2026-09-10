@@ -8,6 +8,8 @@ Stories already seen are tracked by GUID so nothing prints twice.
     python nuclear_news.py
 """
 
+from __future__ import annotations
+
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -145,9 +147,10 @@ def _text(tag, *names):
             return el.get_text(strip=True)
     return ""
 
-def fetch_items(source_name: str, url: str) -> list[dict]:
+def fetch_items(source_name: str, url: str) -> list[dict] | None:
     """
-    Returns a list of dicts with keys: id, title, summary, source.
+    Returns a list of dicts with keys: id, title, summary, source,
+    or None if the feed could not be fetched/parsed (distinct from an empty feed).
     Falls back to BeautifulSoup XML parser if stdlib ET chokes on malformed XML.
     """
     try:
@@ -155,7 +158,7 @@ def fetch_items(source_name: str, url: str) -> list[dict]:
         r.raise_for_status()
     except Exception as e:
         print(f"[{ts()}] [{source_name}] Fetch error: {e}")
-        return []
+        return None
 
     use_bs4 = False
     try:
@@ -170,7 +173,7 @@ def fetch_items(source_name: str, url: str) -> list[dict]:
             raw_entries = _parse_entries_bs4(r.content)
         except Exception as e:
             print(f"[{ts()}] [{source_name}] BS4 parse error: {e}")
-            return []
+            return None
 
         for entry in raw_entries:
             title   = strip_html(_text(entry, "title"))
@@ -382,11 +385,23 @@ def main():
     # restart the script to reset, or persist to a file if preferred).
     seen_ids: set[str] = set()
 
+    # Feeds whose current items are already in seen_ids. A feed that fails
+    # during seeding (e.g. network down) gets seeded silently on its first
+    # successful fetch instead, so its backlog doesn't flood the printer.
+    seeded_urls: set[str] = set()
+
     print(f"[{ts()}] Seeding seen items from current feeds (no printing on first pass)…")
     for source, url in RSS_FEEDS:
-        for item in fetch_items(source, url):
-            seen_ids.add(item["id"])
-    print(f"[{ts()}] Seeded {len(seen_ids)} existing items. Watching for new ones…\n")
+        items = fetch_items(source, url)
+        if items is None:
+            continue
+        seen_ids.update(item["id"] for item in items)
+        seeded_urls.add(url)
+    print(f"[{ts()}] Seeded {len(seen_ids)} existing items. Watching for new ones…")
+    unseeded = len(RSS_FEEDS) - len(seeded_urls)
+    if unseeded:
+        print(f"[{ts()}] {unseeded} feed(s) unreachable; they'll be seeded when they come back.")
+    print()
 
     while True:
         start = time.monotonic()
@@ -394,6 +409,13 @@ def main():
 
         for source, url in RSS_FEEDS:
             items = fetch_items(source, url)
+            if items is None:
+                continue
+            if url not in seeded_urls:
+                seen_ids.update(item["id"] for item in items)
+                seeded_urls.add(url)
+                print(f"[{ts()}]   [{source}] reachable again; seeded {len(items)} existing items.")
+                continue
             for item in items:
                 if item["id"] in seen_ids:
                     continue                        # already processed

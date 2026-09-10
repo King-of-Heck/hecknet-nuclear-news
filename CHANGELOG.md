@@ -4,6 +4,11 @@ Version numbers were reassigned for release (the old scheme bumped the
 minor version for bugfixes); the original number is in parentheses. The
 notes below are from each script's own version history.
 
+## 1.5.2  (originally 1.8)
+
+Feeds unreachable at startup (e.g. network outage) are now seeded silently on
+their first successful fetch instead of printing their whole backlog.
+
 ## 1.5.1  (originally 1.7)
 
 Fixed UnicodeEncodeError when piped through HeckNet Manager (Windows cp1252 can't
