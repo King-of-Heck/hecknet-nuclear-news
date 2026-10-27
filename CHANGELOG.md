@@ -4,6 +4,33 @@ Version numbers were reassigned for release (the old scheme bumped the
 minor version for bugfixes); the original number is in parentheses. The
 notes below are from each script's own version history.
 
+## 1.6.0
+
+Fixed the Toronto Star 429 storm. The old `feed.RSSManagerServlet` URLs are
+dead: thestar.com moved to the TownNews/BLOX platform and now answers all of
+them with the same 312 KB "RSS Feeds" HTML landing page, so the eleven Star
+feeds contributed zero articles while burning through the host's request budget
+and tripping its rate limiter. Replaced them with five working BLOX search
+feeds.
+
+Repointed the six Globe and Mail category feeds (technology, science, health,
+economy, arts and environment) that had been answering 200 with a permanently
+empty channel ever since the Globe reorganised its sections. Arc accepts
+nested paths, so these now point at `business/technology`, `canada/science`,
+`life/wellness`, `business/economy` and `culture`. Environment has no
+successor section, so its slot went to
+`business/industry-news/energy-and-resources`, which carries more nuclear copy
+than a general environment feed would.
+
+Added polite fetching: one `requests.Session` for keep-alive, a minimum gap
+between requests to the same host, adaptive backoff plus retry on HTTP 429, and
+a poll order that round-robins across hosts so the per-host gap costs almost no
+wall-clock time. A poll that overruns the interval now still waits before the
+next one instead of polling flat out.
+
+A feed that returns HTTP 200 but no items is now reported once, so the next
+feed to die quietly does not go unnoticed.
+
 ## 1.5.2  (originally 1.8)
 
 Feeds unreachable at startup (e.g. network outage) are now seeded silently on

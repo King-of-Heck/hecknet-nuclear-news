@@ -5,6 +5,10 @@ Polls a set of RSS feeds every ten minutes and prints any story matching the
 keyword list. Everything from World Nuclear News prints regardless of keywords.
 Stories already seen are tracked by GUID so nothing prints twice.
 
+Feeds are fetched in a round-robin across hosts, with a minimum gap between two
+requests to the same host and backoff on HTTP 429, because some publishers
+rate-limit a burst of section feeds hard.
+
     python nuclear_news.py
 """
 
@@ -16,7 +20,9 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from datetime import datetime
+from urllib.parse import urlsplit
 
 import requests
 import win32print
@@ -38,6 +44,8 @@ MARGIN_PX    = 10
 TEXT_PX      = PAPER_PX - 2 * MARGIN_PX
 
 POLL_INTERVAL = 600         # seconds between feed checks (10 minutes)
+MIN_SLEEP     = 60          # never start the next poll sooner than this, even
+                            # if the last one overran POLL_INTERVAL
 
 # Keywords to watch for (case-insensitive).
 # Each entry is a plain string; we do whole-word / flexible matching below.
@@ -46,19 +54,29 @@ KEYWORDS = ["nuclear", "candu", "ap1000", "ap 1000", "monark",
             "sizewell", "hinkley point", "edf", "framatome", "cnsc", "aecl"]
 
 RSS_FEEDS = [
-    ("Globe & Mail: Canada",        "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/"),
-    ("Globe & Mail: Business",      "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/"),
-    ("Globe & Mail: Politics",      "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/politics/"),
-    ("Globe & Mail: World",         "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/world/"),
-    ("Globe & Mail: Opinion",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/opinion/"),
-    ("Globe & Mail: Technology",    "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/technology/"),
-    ("Globe & Mail: Science",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/science/"),
-    ("Globe & Mail: Health",        "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/health/"),
-    ("Globe & Mail: Environment",   "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/environment/"),
-    ("Globe & Mail: Economy",       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/economy/"),
-    ("Globe & Mail: Real Estate",   "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/real-estate/"),
-    ("Globe & Mail: Arts",          "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/arts/"),
-    ("Globe & Mail: Life",          "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/life/"),
+    # The Globe reorganised its section taxonomy: technology, science, health,
+    # environment, economy and arts no longer exist as top-level categories.
+    # The old URLs for them still answer 200 with a valid but permanently
+    # empty <channel> (~1 KB, zero <item>s), because the endpoint is a
+    # catch-all, which is why they failed silently. Verified 2026-10-27.
+    # Arc accepts nested paths, so the replacements below are the real homes
+    # of that coverage. Environment has no successor section -- the Globe
+    # spreads climate across others -- and energy-and-resources carries more
+    # nuclear copy than a general environment feed would anyway.
+    ("Globe & Mail: Canada",                 "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/"),
+    ("Globe & Mail: Business",               "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/"),
+    ("Globe & Mail: Politics",               "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/politics/"),
+    ("Globe & Mail: World",                  "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/world/"),
+    ("Globe & Mail: Opinion",                "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/opinion/"),
+    ("Globe & Mail: Technology",             "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/technology/"),
+    ("Globe & Mail: Economy",                "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/economy/"),
+    ("Globe & Mail: Energy & Resources",     "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/industry-news/energy-and-resources/"),
+    ("Globe & Mail: Science",                "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/science/"),
+    ("Globe & Mail: Health",                 "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/life/wellness/"),
+    ("Globe & Mail: Culture",                "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/culture/"),
+    ("Globe & Mail: Real Estate",            "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/real-estate/"),
+    ("Globe & Mail: Life",                   "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/life/"),
+
 
     ("World Nuclear News",          "https://world-nuclear-news.org/rss"),
 
@@ -95,20 +113,49 @@ RSS_FEEDS = [
     ("FT: Energy",                  "https://www.ft.com/energy?format=rss"),
     ("FT: Companies",               "https://www.ft.com/companies?format=rss"),
 
-    ("Toronto Star: Top Stories",   "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.topstories.rss"),
-    ("Toronto Star: News",          "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.rss"),
-    ("Toronto Star: Business",      "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.business.rss"),
-    ("Toronto Star: Politics",      "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.canada.politics.rss"),
-    ("Toronto Star: World",         "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.world.rss"),
-    ("Toronto Star: Opinion",       "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.opinion.rss"),
-    ("Toronto Star: Science",       "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.sciencetech.rss"),
-    ("Toronto Star: Environment",   "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.news.environment.rss"),
-    ("Toronto Star: Life",          "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.life.rss"),
-    ("Toronto Star: Entertainment", "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.entertainment.rss"),
-    ("Toronto Star: Sports",        "https://www.thestar.com/content/thestar/feed.RSSManagerServlet.articles.sports.rss"),
+    # thestar.com runs on TownNews/BLOX. The old AEM feed.RSSManagerServlet.*
+    # URLs are gone — every one of them returns the same 312 KB "RSS Feeds"
+    # HTML landing page (HTTP 200, text/html, zero items) and counts against a
+    # tight per-IP rate limit, which is what produced the 429 storm. These are
+    # the BLOX search feeds listed on thestar.com/site/static-pages/rss-feeds.html.
+    # The "*" suffix is a BLOX wildcard: news* also covers news/canada,
+    # news/gta and news/world, so a handful of feeds replaces the old eleven.
+    # Three feeds, not more: measured, the Star starts returning 429 at about
+    # the fourth request in a window. news* already covers news/canada,
+    # news/gta and news/world, and at l=50 each these three carry the Star's
+    # whole nuclear-relevant output. Top stories (bl=2827101) is a subset of
+    # news*, and opinion* rarely matches the keyword list, so neither is worth
+    # a slot. Other sections are listed at
+    # thestar.com/site/static-pages/rss-feeds.html if the budget ever allows.
+    ("Toronto Star: News",          "https://www.thestar.com/search/?f=rss&t=article&c=news*&l=50&s=start_time&sd=desc"),
+    ("Toronto Star: Business",      "https://www.thestar.com/search/?f=rss&t=article&c=business*&l=50&s=start_time&sd=desc"),
+    ("Toronto Star: Politics",      "https://www.thestar.com/search/?f=rss&t=article&c=politics*&l=50&s=start_time&sd=desc"),
 ]
 
-HEADERS = {"User-Agent": "nuclear-news-receipt/1.0"}
+HEADERS = {
+    "User-Agent": "nuclear-news-receipt/1.0",
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+}
+
+# One session for the whole run so connections are kept alive between polls.
+SESSION = requests.Session()
+
+# Politeness. Feeds are fetched in a host round-robin (see interleave_by_host),
+# so these gaps almost never cost real time — by the time we come back to a
+# host, the gap has already elapsed while other hosts were being fetched.
+DEFAULT_HOST_GAP = 1.0      # seconds between two requests to the same host
+HOST_MIN_GAP = {
+    # thestar.com rate-limits hard: three or four requests in quick succession
+    # is enough to start getting 429s, and it sends no Retry-After header.
+    # 30s per request x 3 Star feeds is ~90s of a 600s poll, and most of that
+    # overlaps with the other hosts' requests.
+    "www.thestar.com": 30.0,
+}
+MAX_HOST_GAP    = 90.0      # ceiling for the adaptive backoff below
+RETRIES_ON_429  = 1         # extra attempts after the first 429. One is
+                            # enough: a feed that still fails is simply picked
+                            # up on the next poll ten minutes later, which is
+                            # cheaper than stalling this one.
 
 
 # Pre-compile a single OR pattern; \b gives word boundaries where sensible.
@@ -125,6 +172,90 @@ def contains_keyword(text: str) -> bool:
 def ts() -> str:
     """Current timestamp string for console logging."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+_last_request: dict[str, float] = {}   # host -> time.monotonic() of last fetch
+_current_gap:  dict[str, float] = {}   # host -> gap in force, grows after a 429
+
+
+def base_gap(host: str) -> float:
+    return HOST_MIN_GAP.get(host, DEFAULT_HOST_GAP)
+
+
+def interleave_by_host(feeds: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """
+    Reorder feeds so consecutive entries come from different hosts.
+
+    RSS_FEEDS is grouped by publication because that is how it is read and
+    edited, but fetching it in that order means eleven requests to one host
+    back to back. Round-robin spreads each host's requests across the whole
+    poll, which is both politer and faster than sleeping between them.
+    """
+    buckets: OrderedDict[str, list[tuple[str, str]]] = OrderedDict()
+    for name, url in feeds:
+        buckets.setdefault(urlsplit(url).netloc, []).append((name, url))
+
+    ordered: list[tuple[str, str]] = []
+    while buckets:
+        for host in list(buckets):
+            ordered.append(buckets[host].pop(0))
+            if not buckets[host]:
+                del buckets[host]
+    return ordered
+
+
+def _wait_for_host(host: str) -> None:
+    """Sleep until this host's minimum gap has elapsed."""
+    gap = _current_gap.get(host, base_gap(host))
+    last = _last_request.get(host)
+    if last is None:
+        return
+    remaining = gap - (time.monotonic() - last)
+    if remaining > 0:
+        time.sleep(remaining)
+
+
+def _get(url: str):
+    """
+    GET with per-host pacing and backoff on HTTP 429.
+
+    On a 429 the host's gap is doubled (up to MAX_HOST_GAP) and the request is
+    retried; on success the gap decays back towards its baseline, so one busy
+    moment does not slow the feed down for the rest of the session.
+    """
+    host = urlsplit(url).netloc
+
+    for attempt in range(RETRIES_ON_429 + 1):
+        _wait_for_host(host)
+        r = SESSION.get(url, headers=HEADERS, timeout=15)
+        _last_request[host] = time.monotonic()
+
+        if r.status_code != 429:
+            gap = _current_gap.get(host)
+            if gap is not None:
+                decayed = max(base_gap(host), gap / 2)
+                if decayed <= base_gap(host):
+                    _current_gap.pop(host, None)
+                else:
+                    _current_gap[host] = decayed
+            r.raise_for_status()
+            return r
+
+        grown = min(max(base_gap(host), _current_gap.get(host, base_gap(host))) * 2,
+                    MAX_HOST_GAP)
+        _current_gap[host] = grown
+
+        if attempt == RETRIES_ON_429:
+            r.raise_for_status()        # out of retries: report it as before
+
+        retry_after = r.headers.get("Retry-After")
+        try:
+            pause = float(retry_after) if retry_after else grown
+        except ValueError:
+            pause = grown
+        print(f"[{ts()}] [{host}] 429; backing off {pause:.0f}s "
+              f"(gap now {grown:.0f}s), retrying…")
+        time.sleep(pause)
 
 
 _HTML_TAG = re.compile(r"<[^>]+>")
@@ -154,8 +285,7 @@ def fetch_items(source_name: str, url: str) -> list[dict] | None:
     Falls back to BeautifulSoup XML parser if stdlib ET chokes on malformed XML.
     """
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
+        r = _get(url)
     except Exception as e:
         print(f"[{ts()}] [{source_name}] Fetch error: {e}")
         return None
@@ -215,6 +345,25 @@ def fetch_items(source_name: str, url: str) -> list[dict] | None:
         })
 
     return items
+
+
+_reported_empty: set[str] = set()
+
+
+def check_not_empty(source: str, url: str, items: list) -> None:
+    """
+    Report once when a feed answers 200 but carries no items.
+
+    This is how the Toronto Star feeds failed: the server stopped serving RSS
+    and started serving an HTML page, which parses cleanly and yields nothing.
+    A fetch error is loud; an empty feed is silent, so say something.
+    """
+    if items:
+        _reported_empty.discard(url)
+    elif url not in _reported_empty:
+        _reported_empty.add(url)
+        print(f"[{ts()}]   [{source}] fetched OK but contains no items — "
+              f"the feed URL may be dead.")
 
 
 def load_font(bold=False):
@@ -390,11 +539,16 @@ def main():
     # successful fetch instead, so its backlog doesn't flood the printer.
     seeded_urls: set[str] = set()
 
+    # Fetch order is round-robined across hosts so the per-host gap overlaps
+    # with other hosts' requests instead of stalling the poll.
+    poll_order = interleave_by_host(RSS_FEEDS)
+
     print(f"[{ts()}] Seeding seen items from current feeds (no printing on first pass)…")
-    for source, url in RSS_FEEDS:
+    for source, url in poll_order:
         items = fetch_items(source, url)
         if items is None:
             continue
+        check_not_empty(source, url, items)
         seen_ids.update(item["id"] for item in items)
         seeded_urls.add(url)
     print(f"[{ts()}] Seeded {len(seen_ids)} existing items. Watching for new ones…")
@@ -407,10 +561,11 @@ def main():
         start = time.monotonic()
         print(f"[{ts()}] Polling {len(RSS_FEEDS)} feeds…")
 
-        for source, url in RSS_FEEDS:
+        for source, url in poll_order:
             items = fetch_items(source, url)
             if items is None:
                 continue
+            check_not_empty(source, url, items)
             if url not in seeded_urls:
                 seen_ids.update(item["id"] for item in items)
                 seeded_urls.add(url)
@@ -433,7 +588,11 @@ def main():
                     print(f"[{ts()}]   [skip] [{source}] {item['title'][:60]}")
 
         elapsed = time.monotonic() - start
-        sleep_for = max(0, POLL_INTERVAL - elapsed)
+        sleep_for = max(MIN_SLEEP, POLL_INTERVAL - elapsed)
+        if elapsed > POLL_INTERVAL:
+            print(f"[{ts()}] Poll took {elapsed:.0f}s, longer than the "
+                  f"{POLL_INTERVAL}s interval - a host is probably rate-limiting "
+                  f"us. Sleeping {sleep_for:.0f}s rather than polling flat out.")
         print(f"[{ts()}] Poll complete in {elapsed:.1f}s. Next check in {sleep_for:.0f}s…\n")
         time.sleep(sleep_for)
 
