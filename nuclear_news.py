@@ -3,7 +3,13 @@ Nuclear news ticker.
 
 Polls a set of RSS feeds every ten minutes and prints any story matching the
 keyword list. Everything from World Nuclear News prints regardless of keywords.
-Stories already seen are tracked by GUID so nothing prints twice.
+
+Stories already seen are tracked by GUID so nothing prints twice, and that
+record persists to nuclear_news_seen.json next to this file, so a restart does
+not lose it. Backlog is held back by age rather than by marking everything
+currently in the feeds as seen: an unseen story older than MAX_BACKFILL_AGE is
+recorded without being printed. Blanket seeding happens only on a true first
+run, when no state file exists yet.
 
 Feeds are fetched in a round-robin across hosts, with a minimum gap between two
 requests to the same host and backoff on HTTP 429, because some publishers
@@ -17,11 +23,14 @@ from __future__ import annotations
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+import json
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import requests
@@ -174,6 +183,135 @@ def ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# Seen-item persistence. Without it the seen set lived only in memory, so every
+# restart started from nothing, and to keep that restart from printing the
+# whole backlog the first pass marked everything currently in every feed as
+# seen without printing it -- which meant a restart silently swallowed every
+# story still listed, up to a fortnight of them. Persisting the set makes a
+# restart cheap; the age cutoff below is what holds the backlog back.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SEEN_FILE   = os.path.join(_SCRIPT_DIR, "nuclear_news_seen.json")
+_SEEN_NAME  = os.path.basename(SEEN_FILE)
+
+# An unseen story older than this is recorded but not printed. The feeds carry
+# up to a fortnight of history, so without this guard the first poll after a
+# restart would treat all of it as new.
+MAX_BACKFILL_AGE = timedelta(hours=24)
+
+# How long an ID is remembered. This MUST exceed the longest feed window, or a
+# story could be forgotten while still listed and print a second time.
+# Measured 2026-11-08, the longest of the 45 feeds is the Globe opinion feed at
+# 14 days; 30 leaves comfortable margin.
+SEEN_RETENTION = timedelta(days=30)
+
+# Safety valve on file size, independent of the age rule above. 45 feeds at
+# ~100 items each is roughly 4,500 live IDs, so this leaves about 4x headroom.
+MAX_SEEN_ENTRIES = 20000
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def parse_date(raw):
+    """
+    Parse an RSS pubDate (RFC 822) or an Atom published/updated (ISO 8601)
+    into an aware UTC datetime. Returns None when it cannot be read, in which
+    case the caller treats the item as current rather than guessing.
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+    dt = None
+    try:
+        dt = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def load_seen():
+    """
+    Load the persisted {item id: ISO timestamp first seen} map.
+
+    Returns (seen, first_run). first_run is True only when there is no state
+    file at all -- the single case where the current contents of every feed is
+    swallowed silently, so a fresh install prints no backlog. A file that
+    exists but cannot be read is deliberately NOT a first run: say so loudly
+    and fall back to the age cutoff, which prints a day rather than a
+    fortnight or nothing at all.
+    """
+    if not os.path.exists(SEEN_FILE):
+        return {}, True
+    try:
+        with open(SEEN_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        seen = data["seen"]
+        if not isinstance(seen, dict):
+            raise ValueError("'seen' is not an object")
+        return {str(k): str(v) for k, v in seen.items()}, False
+    except Exception as e:
+        hours = int(MAX_BACKFILL_AGE.total_seconds() // 3600)
+        print(f"[{ts()}] [WARNING] {_SEEN_NAME} could not be read ({e}). "
+              f"It will be rewritten; only the last {hours}h will print.")
+        return {}, False
+
+
+def prune_seen(seen):
+    """
+    Drop IDs older than SEEN_RETENTION, then cap the total, oldest first.
+
+    An entry with an unreadable timestamp is re-stamped rather than dropped:
+    dropping it would let that story print again, which is the one outcome
+    this whole mechanism exists to prevent.
+    """
+    now_iso = _utc_now_iso()
+    cutoff  = datetime.now(timezone.utc) - SEEN_RETENTION
+    kept = {}
+
+    for item_id, first_seen in seen.items():
+        try:
+            when = datetime.fromisoformat(first_seen)
+        except (TypeError, ValueError):
+            kept[item_id] = now_iso
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when >= cutoff:
+            kept[item_id] = first_seen
+
+    if len(kept) > MAX_SEEN_ENTRIES:
+        newest = sorted(kept.items(), key=lambda kv: kv[1], reverse=True)
+        kept = dict(newest[:MAX_SEEN_ENTRIES])
+    return kept
+
+
+def save_seen(seen):
+    """
+    Write the map atomically, so a crash or power cut mid-write cannot leave a
+    truncated file behind. A corrupt file costs a day of backfill, so the
+    rename is worth it.
+    """
+    tmp = SEEN_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "seen": seen}, fh)
+        os.replace(tmp, SEEN_FILE)
+    except OSError as e:
+        print(f"[{ts()}] [WARNING] Could not write {_SEEN_NAME}: {e}")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 _last_request: dict[str, float] = {}   # host -> time.monotonic() of last fetch
 _current_gap:  dict[str, float] = {}   # host -> gap in force, grows after a 429
 
@@ -311,10 +449,12 @@ def fetch_items(source_name: str, url: str) -> list[dict] | None:
             uid     = _text(entry, "guid", "id", "link") or title
             if title:
                 items.append({
-                    "id":      uid.strip(),
-                    "title":   title,
-                    "summary": summary,
-                    "source":  source_name,
+                    "id":        uid.strip(),
+                    "title":     title,
+                    "summary":   summary,
+                    "source":    source_name,
+                    "published": parse_date(
+                        _text(entry, "pubDate", "published", "updated")),
                 })
         return items
 
@@ -337,11 +477,19 @@ def fetch_items(source_name: str, url: str) -> list[dict] | None:
                entry.findtext("link") or
                title)
 
+        published = parse_date(
+            entry.findtext("pubDate") or
+            entry.findtext("published") or
+            entry.findtext("atom:published", namespaces=ns) or
+            entry.findtext("atom:updated", namespaces=ns) or
+            entry.findtext("updated"))
+
         items.append({
-            "id":      uid.strip(),
-            "title":   title,
-            "summary": summary,
-            "source":  source_name,
+            "id":        uid.strip(),
+            "title":     title,
+            "summary":   summary,
+            "source":    source_name,
+            "published": published,
         })
 
     return items
@@ -524,68 +672,106 @@ def print_alert(source: str, title: str, summary: str):
 
 
 def main():
-    print(f"[{ts()}] Nuclear News Receipt Printer starting…")
+    print(f"[{ts()}] Nuclear News Receipt Printer starting\u2026")
     print(f"[{ts()}] Keywords : {', '.join(KEYWORDS)}")
     print(f"[{ts()}] Interval : {POLL_INTERVAL}s ({POLL_INTERVAL // 60} min)")
     print(f"[{ts()}] Printer  : {PRINTER_NAME}")
+    print(f"[{ts()}] State    : {SEEN_FILE}")
     print(f"[{ts()}] Press Ctrl-C to stop.\n")
 
-    # IDs of items we have already printed (grows forever during the session;
-    # restart the script to reset, or persist to a file if preferred).
-    seen_ids: set[str] = set()
+    backfill_hours = int(MAX_BACKFILL_AGE.total_seconds() // 3600)
 
-    # Feeds whose current items are already in seen_ids. A feed that fails
-    # during seeding (e.g. network down) gets seeded silently on its first
-    # successful fetch instead, so its backlog doesn't flood the printer.
-    seeded_urls: set[str] = set()
+    seen, first_run = load_seen()
+    before = len(seen)
+    seen = prune_seen(seen)
+    if before != len(seen):
+        print(f"[{ts()}] Pruned {before - len(seen)} expired ID(s) from "
+              f"{_SEEN_NAME}.")
 
     # Fetch order is round-robined across hosts so the per-host gap overlaps
     # with other hosts' requests instead of stalling the poll.
     poll_order = interleave_by_host(RSS_FEEDS)
 
-    print(f"[{ts()}] Seeding seen items from current feeds (no printing on first pass)…")
-    for source, url in poll_order:
-        items = fetch_items(source, url)
-        if items is None:
-            continue
-        check_not_empty(source, url, items)
-        seen_ids.update(item["id"] for item in items)
-        seeded_urls.add(url)
-    print(f"[{ts()}] Seeded {len(seen_ids)} existing items. Watching for new ones…")
-    unseeded = len(RSS_FEEDS) - len(seeded_urls)
-    if unseeded:
-        print(f"[{ts()}] {unseeded} feed(s) unreachable; they'll be seeded when they come back.")
+    if first_run:
+        # No state file at all. Swallow whatever the feeds hold right now so a
+        # fresh install prints no backlog. This happens exactly once: from the
+        # next start onwards the persisted set is what decides, and the age
+        # cutoff below is what holds the backlog back.
+        print(f"[{ts()}] No {_SEEN_NAME} yet, so this is a first run. Seeding "
+              f"from current feeds (nothing will print)\u2026")
+        now_iso = _utc_now_iso()
+        seeded_urls = set()
+        for source, url in poll_order:
+            items = fetch_items(source, url)
+            if items is None:
+                continue
+            check_not_empty(source, url, items)
+            for item in items:
+                seen[item["id"]] = now_iso
+            seeded_urls.add(url)
+        save_seen(seen)
+        print(f"[{ts()}] Seeded {len(seen)} existing items. Watching for new "
+              f"ones\u2026")
+        unseeded = len(RSS_FEEDS) - len(seeded_urls)
+        if unseeded:
+            print(f"[{ts()}] {unseeded} feed(s) unreachable during seeding; "
+                  f"when they return, their stories from the last "
+                  f"{backfill_hours}h will print.")
+    else:
+        print(f"[{ts()}] Loaded {len(seen)} seen item(s) from {_SEEN_NAME}. "
+              f"Unprinted stories from the last {backfill_hours}h will print; "
+              f"anything older is recorded without printing.")
     print()
 
     while True:
-        start = time.monotonic()
-        print(f"[{ts()}] Polling {len(RSS_FEEDS)} feeds…")
+        start   = time.monotonic()
+        cutoff  = datetime.now(timezone.utc) - MAX_BACKFILL_AGE
+        now_iso = _utc_now_iso()
+        changed = False
+        print(f"[{ts()}] Polling {len(RSS_FEEDS)} feeds\u2026")
 
         for source, url in poll_order:
             items = fetch_items(source, url)
             if items is None:
                 continue
             check_not_empty(source, url, items)
-            if url not in seeded_urls:
-                seen_ids.update(item["id"] for item in items)
-                seeded_urls.add(url)
-                print(f"[{ts()}]   [{source}] reachable again; seeded {len(items)} existing items.")
-                continue
-            for item in items:
-                if item["id"] in seen_ids:
-                    continue                        # already processed
-                seen_ids.add(item["id"])
 
+            for item in items:
+                if item["id"] in seen:
+                    continue                        # already processed
+                seen[item["id"]] = now_iso
+                changed = True
+
+                # Too old to be worth a receipt. This is the guard that makes
+                # a restart cheap: the feeds still list up to a fortnight of
+                # stories, and every one of them is unseen the first time a
+                # new state file is consulted. An item we could not date is
+                # treated as current rather than discarded.
+                published = item.get("published")
+                if published is not None and published < cutoff:
+                    print(f"[{ts()}]   [old] [{source}] {item['title'][:60]}")
+                    continue
+
+                # World Nuclear News prints everything; all others need a keyword match
                 is_wnn = "World Nuclear News" in item["source"]
                 haystack = f"{item['title']} {item['summary']}"
                 if is_wnn or contains_keyword(haystack):
                     try:
-                        print(f"[{ts()}]    MATCH [{source}] {item['title'][:70]}")
+                        print(f"[{ts()}]   \u2192 MATCH [{source}] {item['title'][:70]}")
                         print_alert(item["source"], item["title"], item["summary"])
                     except Exception as e:
                         print(f"[{ts()}]   [PRINT ERROR] {e}")
+                        # Leave it unseen so the next poll tries again, rather
+                        # than losing the story to a paper jam or a printer
+                        # that was switched off.
+                        seen.pop(item["id"], None)
                 else:
+                    # Log non-matching new items quietly
                     print(f"[{ts()}]   [skip] [{source}] {item['title'][:60]}")
+
+        if changed:
+            seen = prune_seen(seen)
+            save_seen(seen)
 
         elapsed = time.monotonic() - start
         sleep_for = max(MIN_SLEEP, POLL_INTERVAL - elapsed)
@@ -593,9 +779,9 @@ def main():
             print(f"[{ts()}] Poll took {elapsed:.0f}s, longer than the "
                   f"{POLL_INTERVAL}s interval - a host is probably rate-limiting "
                   f"us. Sleeping {sleep_for:.0f}s rather than polling flat out.")
-        print(f"[{ts()}] Poll complete in {elapsed:.1f}s. Next check in {sleep_for:.0f}s…\n")
+        print(f"[{ts()}] Poll complete in {elapsed:.1f}s. "
+              f"Next check in {sleep_for:.0f}s\u2026\n")
         time.sleep(sleep_for)
-
 
 if __name__ == "__main__":
     try:

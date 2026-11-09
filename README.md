@@ -11,7 +11,16 @@ Two matching rules apply:
 - anything from World Nuclear News prints unconditionally
 - everything else prints only if the title or description matches `KEYWORDS`
 
-Already-printed stories are tracked by GUID or link, so nothing repeats.
+Already-printed stories are tracked by GUID or link, so nothing repeats. That
+record is kept in `nuclear_news_seen.json` next to the script, so a restart
+does not lose it and does not reprint a fortnight of headlines.
+
+Backlog is held back by age rather than by treating everything already in the
+feeds as printed. A story that has not been seen but is older than
+`MAX_BACKFILL_AGE` (24 hours) is recorded without being printed, so coming back
+from an outage prints the last day and not the whole feed. The one exception is
+a first run with no state file yet, which records the current contents of every
+feed silently so a fresh install prints nothing.
 
 Edit `FEEDS` and `KEYWORDS` at the top of the file to change coverage. The
 poll interval is `POLL_SECONDS`; ten minutes is deliberate, since a shorter

@@ -4,6 +4,42 @@ Version numbers were reassigned for release (the old scheme bumped the
 minor version for bugfixes); the original number is in parentheses. The
 notes below are from each script's own version history.
 
+## 1.7.0
+
+Seen-item IDs now persist to `nuclear_news_seen.json` next to the script, so a
+restart no longer loses them.
+
+They previously lived only in memory, and the startup pass added every item
+currently in every feed to the set without printing any of it, to keep a fresh
+start from flooding the printer. The effect was that any restart silently
+swallowed every story still listed in a feed — a week of it for the Globe and
+Mail's business feed, a fortnight for its opinion feed. A CANDU commentary
+piece published 2026-11-04 was lost exactly that way: it was in three of the
+polled feeds and matched the keyword list, but a restart had already marked it
+seen.
+
+Backlog is now held back by age instead of by blanket seeding. An unseen story
+older than `MAX_BACKFILL_AGE` (24 hours) is recorded and logged `[old]` rather
+than printed, so coming back from a long outage prints the last day rather than
+the last fortnight. Items carry a parsed publication date for this, read from
+RSS `pubDate` or Atom `published`/`updated`; an entry with no usable date is
+treated as current rather than guessed at.
+
+Blanket seeding now happens only on a true first run, when no state file
+exists. A state file that exists but cannot be read is reported loudly and
+falls back to the age cutoff, rather than being mistaken for a first run and
+swallowing everything.
+
+The set is pruned by age (`SEEN_RETENTION`, 30 days) and capped by count, so it
+no longer grows without limit. Retention is deliberately longer than the
+longest feed window, measured at 14 days, so a story cannot be forgotten while
+still listed and print a second time. Writes are atomic and happen only when
+something changed.
+
+A story whose receipt fails to print is no longer marked as seen, so the next
+poll retries it instead of losing it to a paper jam or a printer that was
+switched off.
+
 ## 1.6.0
 
 Fixed the Toronto Star 429 storm. The old `feed.RSSManagerServlet` URLs are
