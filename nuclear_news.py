@@ -154,11 +154,14 @@ SESSION = requests.Session()
 # host, the gap has already elapsed while other hosts were being fetched.
 DEFAULT_HOST_GAP = 1.0      # seconds between two requests to the same host
 HOST_MIN_GAP = {
-    # thestar.com rate-limits hard: three or four requests in quick succession
-    # is enough to start getting 429s, and it sends no Retry-After header.
-    # 30s per request x 3 Star feeds is ~90s of a 600s poll, and most of that
-    # overlaps with the other hosts' requests.
-    "www.thestar.com": 30.0,
+    # thestar.com rate-limits per IP, and harder than first measured. At 30s
+    # apart the third Star request of a poll (Politics) was refused with 429
+    # about every other poll, and so was its retry a minute later; the first
+    # request of the next poll, ten minutes on, always went through. So the
+    # window is minutes, not seconds. 120s apart puts the three requests at
+    # 0, 120 and 240s; worst case, with a refusal and one retry, a poll still
+    # finishes inside the 600s interval. It sends no Retry-After header.
+    "www.thestar.com": 120.0,
 }
 MAX_HOST_GAP    = 90.0      # ceiling for the adaptive backoff below
 RETRIES_ON_429  = 1         # extra attempts after the first 429. One is
@@ -379,8 +382,11 @@ def _get(url: str):
             r.raise_for_status()
             return r
 
+        # The ceiling is never below the host's own baseline: with the Star
+        # at 120s and MAX_HOST_GAP at 90s, a plain min() would turn a 429
+        # into a *shorter* gap, the opposite of backing off.
         grown = min(max(base_gap(host), _current_gap.get(host, base_gap(host))) * 2,
-                    MAX_HOST_GAP)
+                    max(MAX_HOST_GAP, base_gap(host)))
         _current_gap[host] = grown
 
         if attempt == RETRIES_ON_429:

@@ -4,6 +4,22 @@ Version numbers were reassigned for release (the old scheme bumped the
 minor version for bugfixes); the original number is in parentheses. The
 notes below are from each script's own version history.
 
+## 1.7.1
+
+Toronto Star requests are spaced 120 seconds apart instead of 30.
+
+At 30 seconds the third Star request of each poll was refused with HTTP 429
+about every other poll, and so was its retry a minute later. Nothing was lost,
+since an unseen story under 24 hours old prints on the next poll that gets
+through, but those stories ran 10-20 minutes late and every other poll logged
+a fetch error. The limit is per IP, so another machine on the same connection
+fetching the Star counts against it too.
+
+Also fixes a backoff bug the wider gap would have triggered. The backoff
+ceiling (`MAX_HOST_GAP`, 90 seconds) applied even when a host's baseline gap
+was larger, so a 429 would have *shortened* the Star's gap to 90 seconds. The
+ceiling is now never below the host's own baseline.
+
 ## 1.7.0
 
 Seen-item IDs now persist to `nuclear_news_seen.json` next to the script, so a
