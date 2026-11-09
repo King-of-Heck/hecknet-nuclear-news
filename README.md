@@ -22,9 +22,9 @@ from an outage prints the last day and not the whole feed. The one exception is
 a first run with no state file yet, which records the current contents of every
 feed silently so a fresh install prints nothing.
 
-Edit `FEEDS` and `KEYWORDS` at the top of the file to change coverage. The
-poll interval is `POLL_SECONDS`; ten minutes is deliberate, since a shorter
-interval got the feeds rate-limited.
+Edit `RSS_FEEDS` and `KEYWORDS` at the top of the file to change coverage. The
+poll interval is `POLL_INTERVAL`, in seconds; ten minutes is deliberate, since
+a shorter interval got the feeds rate-limited.
 
 ## Requirements
 
